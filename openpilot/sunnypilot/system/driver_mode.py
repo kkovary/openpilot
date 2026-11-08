@@ -6,9 +6,12 @@ Driver modes: one switch between Kyle's setup and a factory-safety setup for oth
 
 Turning alpha longitudinal off makes sunnypilot clear or downgrade the settings that depend on it
 (curve slowing toggles, speed limit assist -> warning, experimental mode). Switching to maya saves
-Kyle's values first, and switching back restores them exactly.
+Kyle's values first, and switching back restores them.
 
-Only switch while offroad: CarParams (and with it longitudinal control) is decided at car start.
+Longitudinal control is decided when the car starts, so a switch applies at the next car start.
+AlphaLongitudinalEnabled is written immediately so the next start picks it up. The rest of kyle's
+settings are restored only while offroad: during a drive that started without openpilot
+longitudinal, sunnypilot's speed limit assist would downgrade a restored assist mode again.
 """
 from openpilot.common.params import Params
 
@@ -59,16 +62,35 @@ def _apply(params: Params, values: dict) -> None:
       params.put(key, value, block=True)
 
 
-def set_mode(params: Params, mode: int) -> bool:
-  """Switch driver mode. Returns True if anything changed."""
+def apply_pending_restore(params: Params) -> bool:
+  """Restore kyle's saved settings after a switch made onroad. Call only while offroad."""
+  if not params.get_bool("DriverModeRestorePending"):
+    return False
+  if get_mode(params) == KYLE:
+    _apply(params, params.get("DriverModeKyleSnapshot") or KYLE_DEFAULTS)
+  params.remove("DriverModeRestorePending")
+  return True
+
+
+def set_mode(params: Params, mode: int, offroad: bool) -> bool:
+  """Switch driver mode; it applies at the next car start. Returns True if anything changed."""
   if mode not in (KYLE, MAYA) or mode == get_mode(params):
     return False
 
   if mode == MAYA:
+    params.remove("DriverModeRestorePending")
     params.put("DriverModeKyleSnapshot", {key: params.get(key) for key in SNAPSHOT_KEYS}, block=True)
     _apply(params, MAYA_SETTINGS)
   else:
-    _apply(params, params.get("DriverModeKyleSnapshot") or KYLE_DEFAULTS)
+    params.put_bool("AlphaLongitudinalEnabled", True, block=True)
+    params.put_bool("DriverModeRestorePending", True, block=True)
 
   params.put("DriverMode", mode, block=True)
+  if offroad:
+    apply_pending_restore(params)
   return True
+
+
+def active_mode(openpilot_longitudinal: bool) -> int:
+  """The mode the current drive is actually running, from CarParams."""
+  return KYLE if openpilot_longitudinal else MAYA

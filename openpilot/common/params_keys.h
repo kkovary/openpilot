@@ -402,6 +402,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     // driver modes (kyle / maya)
     {"DriverMode", {PERSISTENT | BACKUP, INT, "0"}},
     {"DriverModeKyleSnapshot", {PERSISTENT, JSON}},
+    {"DriverModeRestorePending", {PERSISTENT, BOOL}},
 
     // sunnypilot model params
     {"CameraOffset", {PERSISTENT | BACKUP, FLOAT, "0.0"}},
