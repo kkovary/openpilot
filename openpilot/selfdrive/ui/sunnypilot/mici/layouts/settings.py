@@ -12,11 +12,45 @@ from openpilot.selfdrive.ui.mici.widgets.dialog import BigConfirmationDialog, Bi
 from openpilot.selfdrive.ui.sunnypilot.mici.layouts.sunnylink import SunnylinkLayoutMici
 from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import ModelsLayoutMici
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.sunnypilot.system.driver_mode import KYLE, MAYA, MODE_NAMES, get_mode, set_mode
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 
 ICON_SIZE = 70
 BIG_ICON_SIZE = 110
+
+
+class DriverModeButton(SettingsBigButton):
+  """Switch between kyle mode (openpilot gas/brake) and maya mode (stock ACC + factory AEB). Offroad only."""
+  def __init__(self):
+    self._wheel_icon = gui_app.texture("icons_mici/wheel.png", ICON_SIZE, ICON_SIZE)
+    super().__init__(tr("driver"), "", self._wheel_icon)
+    self.set_click_callback(self._on_click)
+    self.refresh()
+
+  def refresh(self):
+    self.set_value(f"{MODE_NAMES[get_mode(ui_state.params)]} mode")
+
+  def _on_click(self):
+    if ui_state.started:
+      gui_app.push_widget(BigDialog(tr("turn the car off to switch drivers"), ""))
+      return
+
+    new_mode = MAYA if get_mode(ui_state.params) == KYLE else KYLE
+    # kyle mode turns factory AEB off, so it gets the red slider
+    title = tr("slide for kyle mode") if new_mode == KYLE else tr("slide for maya mode")
+    gui_app.push_widget(BigConfirmationDialog(title, self._wheel_icon, red=new_mode == KYLE,
+                                              confirm_callback=lambda: self._switch(new_mode)))
+
+  def _switch(self, mode: int):
+    set_mode(ui_state.params, mode)
+    self.refresh()
+    if mode == MAYA:
+      gui_app.push_widget(BigDialog(tr("maya mode"), tr("Car's own cruise control and emergency braking; sunnypilot still steers. " +
+                                                       "Applies when the car starts.")))
+    else:
+      gui_app.push_widget(BigDialog(tr("kyle mode"), tr("sunnypilot gas and brake with your saved settings; factory emergency braking is off. " +
+                                                       "Applies when the car starts.")))
 
 
 class SunnylinkBigButton(SettingsBigButton):
@@ -75,12 +109,20 @@ class SettingsLayoutSP(OP.SettingsLayout):
     # end slot: enable-offroad (right of developer)
     items.append(self._enable_offroad_btn_offroad)
 
+    # driver mode first, so it's the first card on the settings screen
+    self._driver_mode_btn = DriverModeButton()
+    items.insert(0, self._driver_mode_btn)
+
     self._scroller._items.clear()
     for item in items:
       self._scroller.add_widget(item)
 
   def _update_state(self):
     super()._update_state()
+
+  def show_event(self):
+    super().show_event()
+    self._driver_mode_btn.refresh()
 
   def _handle_always_offroad(self, enable: bool):
 
