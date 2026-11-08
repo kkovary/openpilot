@@ -1,0 +1,90 @@
+# Keeps this fork in step with MVL's Honda branch.
+#  - `mvl` is an exact mirror of mvl-boston/openpilot:sp-honda-dev-202608 (never edit it by hand).
+#  - `main` = mvl + our mods. New MVL commits are merged into `main` automatically when they merge
+#    cleanly; on a conflict, `main` is left alone and a PR from `mvl` into `main` is opened to resolve by hand.
+name: sync from MVL
+
+on:
+  schedule:
+    - cron: '17 */4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: sync-mvl
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM_REPO: https://github.com/mvl-boston/openpilot.git
+  UPSTREAM_BRANCH: sp-honda-dev-202608
+  MIRROR_BRANCH: mvl
+  TARGET_BRANCH: main
+
+jobs:
+  sync:
+    if: github.repository == 'kkovary/openpilot'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          lfs: false
+          submodules: false
+
+      - name: Fetch MVL
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+          echo "UPSTREAM_SHA=$(git rev-parse FETCH_HEAD)" >> "$GITHUB_ENV"
+
+      - name: Update mirror branch
+        run: |
+          # mirror tracks MVL exactly, including any history rewrites on his side
+          git push --force origin "$UPSTREAM_SHA:refs/heads/$MIRROR_BRANCH"
+
+      - name: Merge into main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          short=$(git rev-parse --short "$UPSTREAM_SHA")
+          if git merge-base --is-ancestor "$UPSTREAM_SHA" HEAD; then
+            echo "main already contains MVL $short"
+            exit 0
+          fi
+
+          if git merge --no-edit -m "Merge MVL $UPSTREAM_BRANCH ($short)" "$UPSTREAM_SHA"; then
+            git push origin "HEAD:$TARGET_BRANCH"
+            echo "merged MVL $short into $TARGET_BRANCH"
+            exit 0
+          fi
+
+          conflicts=$(git diff --name-only --diff-filter=U)
+          git merge --abort
+          echo "merge conflict with MVL $short:"
+          echo "$conflicts"
+
+          existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --base "$TARGET_BRANCH" --head "$MIRROR_BRANCH" --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh pr comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Still conflicting as of MVL \`$short\`. Conflicting files:
+          \`\`\`
+          $conflicts
+          \`\`\`"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --base "$TARGET_BRANCH" --head "$MIRROR_BRANCH" \
+              --title "Sync conflict: merge MVL $UPSTREAM_BRANCH ($short)" \
+              --body "The scheduled sync couldn't merge MVL's latest \`$UPSTREAM_BRANCH\` into \`$TARGET_BRANCH\` cleanly, so \`$TARGET_BRANCH\` was left unchanged.
+
+          Conflicting files:
+          \`\`\`
+          $conflicts
+          \`\`\`
+
+          Resolve on a branch off \`$TARGET_BRANCH\`, merge \`$MIRROR_BRANCH\` into it, and open a PR into \`$TARGET_BRANCH\`."
+          fi
+          exit 1
