@@ -12,11 +12,68 @@ from openpilot.selfdrive.ui.mici.widgets.dialog import BigConfirmationDialog, Bi
 from openpilot.selfdrive.ui.sunnypilot.mici.layouts.sunnylink import SunnylinkLayoutMici
 from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import ModelsLayoutMici
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.sunnypilot.system.driver_mode import KYLE, MAYA, MODE_NAMES, active_mode, apply_pending_restore, get_mode, set_mode
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 
 ICON_SIZE = 70
 BIG_ICON_SIZE = 110
+
+
+class DriverModeButton(SettingsBigButton):
+  """Switch between kyle mode (openpilot gas/brake) and maya mode (stock ACC + factory AEB).
+  A switch applies at the next car start; until then the card shows "restart car"."""
+  def __init__(self):
+    self._wheel_icon = gui_app.texture("icons_mici/wheel.png", ICON_SIZE, ICON_SIZE)
+    super().__init__(tr("driver"), "", self._wheel_icon)
+    self.set_click_callback(self._on_click)
+    # fires on every onroad/offroad change and once at startup
+    ui_state.add_offroad_transition_callback(self._on_offroad_transition)
+    self.refresh()
+
+  def refresh(self):
+    self._selected = get_mode(ui_state.params)
+    self._update_label()
+
+  def _restart_needed(self) -> bool:
+    return ui_state.started and ui_state.CP is not None and active_mode(ui_state.CP.openpilotLongitudinalControl) != self._selected
+
+  def _update_label(self):
+    value = f"{MODE_NAMES[self._selected]} mode"
+    if self._restart_needed():
+      value += " · " + tr("restart car")
+    if value != self.value:
+      self.set_value(value)
+
+  def _update_state(self):
+    super()._update_state()
+    self._update_label()
+
+  def _on_offroad_transition(self):
+    if not ui_state.started:
+      apply_pending_restore(ui_state.params)
+    self.refresh()
+
+  def _on_click(self):
+    if ui_state.engaged:
+      gui_app.push_widget(BigDialog(tr("disengage to switch drivers"), ""))
+      return
+
+    new_mode = MAYA if self._selected == KYLE else KYLE
+    # kyle mode turns factory AEB off, so it gets the red slider
+    title = tr("slide for kyle mode") if new_mode == KYLE else tr("slide for maya mode")
+    gui_app.push_widget(BigConfirmationDialog(title, self._wheel_icon, red=new_mode == KYLE,
+                                              confirm_callback=lambda: self._switch(new_mode)))
+
+  def _switch(self, mode: int):
+    set_mode(ui_state.params, mode, offroad=not ui_state.started)
+    self.refresh()
+    apply_note = tr("Turn the car off and on to apply.") if ui_state.started else tr("Applies when the car starts.")
+    if mode == MAYA:
+      desc = tr("Car's own cruise control and emergency braking; sunnypilot still steers.")
+    else:
+      desc = tr("sunnypilot gas and brake with your saved settings; factory emergency braking is off.")
+    gui_app.push_widget(BigDialog(tr("maya mode selected") if mode == MAYA else tr("kyle mode selected"), f"{desc} {apply_note}"))
 
 
 class SunnylinkBigButton(SettingsBigButton):
@@ -75,12 +132,20 @@ class SettingsLayoutSP(OP.SettingsLayout):
     # end slot: enable-offroad (right of developer)
     items.append(self._enable_offroad_btn_offroad)
 
+    # driver mode first, so it's the first card on the settings screen
+    self._driver_mode_btn = DriverModeButton()
+    items.insert(0, self._driver_mode_btn)
+
     self._scroller._items.clear()
     for item in items:
       self._scroller.add_widget(item)
 
   def _update_state(self):
     super()._update_state()
+
+  def show_event(self):
+    super().show_event()
+    self._driver_mode_btn.refresh()
 
   def _handle_always_offroad(self, enable: bool):
 
