@@ -39,6 +39,8 @@ MAYA_SETTINGS = {
 # Used to restore kyle mode if no snapshot was ever saved (e.g. the device started in maya mode).
 KYLE_DEFAULTS = {
   "AlphaLongitudinalEnabled": True,
+  # without it the planner ignores the driving model: no slowing for lights/stop signs, harsher acceleration
+  "ExperimentalMode": True,
   "SmartCruiseControlVision": True,
   "SmartCruiseControlMap": True,
   "SpeedLimitMode": 3,  # assist
