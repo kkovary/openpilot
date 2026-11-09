@@ -4,35 +4,25 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
-from collections.abc import Callable
-
 import pyray as rl
 
 from openpilot.selfdrive.ui.mici.layouts.settings import settings as OP
 from openpilot.selfdrive.ui.mici.layouts.settings.settings import SettingsBigButton
 from openpilot.selfdrive.ui.mici.layouts.settings.device.device_layout import DeviceLayoutMici
-from openpilot.selfdrive.ui.mici.widgets.button import COMPLICATION_GREY, BigCircleButton, GreyBigButton
-from openpilot.selfdrive.ui.mici.widgets.dialog import BigConfirmationCircleButton, BigConfirmationDialog, BigDialog
+from openpilot.selfdrive.ui.mici.widgets.button import COMPLICATION_GREY, BigCircleButton
+from openpilot.selfdrive.ui.mici.widgets.dialog import BigConfirmationDialog, BigDialog
 from openpilot.selfdrive.ui.sunnypilot.mici.layouts.sunnylink import SunnylinkLayoutMici
 from openpilot.selfdrive.ui.sunnypilot.mici.layouts.models import ModelsLayoutMici
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.system.driver_mode import KYLE, MAYA, MODE_NAMES, active_mode, apply_pending_restore, get_mode, set_mode
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
-from openpilot.system.ui.widgets.scroller import NavScroller
 
 ICON_SIZE = 70
 BIG_ICON_SIZE = 110
 
 
 RESTART_COLOR = rl.Color(255, 115, 0, 255)  # same orange as onroad user-prompt alerts
-
-# one card per line: info cards are fixed height, keep each under ~100 characters
-MODE_DESCRIPTIONS = {
-  KYLE: ["sunnypilot gas and brake, with curve slowing, speed limit assist and your saved settings.",
-         "Factory emergency braking is off."],
-  MAYA: ["Car's own cruise control and emergency braking. sunnypilot still steers."],
-}
 
 
 def running_mode() -> int | None:
@@ -42,38 +32,6 @@ def running_mode() -> int | None:
   return active_mode(ui_state.CP.openpilotLongitudinalControl)
 
 
-class DriverModePage(NavScroller):
-  """Details behind the driver card: what's running, what's selected, what each mode does, and the switch."""
-  def __init__(self, on_switch: Callable[[int], None]):
-    super().__init__()
-    selected = get_mode(ui_state.params)
-    running = running_mode()
-    other = MAYA if selected == KYLE else KYLE
-    wheel = gui_app.texture("icons_mici/wheel.png", 64, 64)
-    warning = gui_app.texture("icons_mici/setup/warning.png", 64, 64)
-
-    if running is None:
-      status = GreyBigButton(f"{MODE_NAMES[selected]} mode", tr("selected. applies when the car starts."), wheel)
-    elif running == selected:
-      status = GreyBigButton(f"{MODE_NAMES[selected]} mode", tr("active on this drive."), wheel)
-    else:
-      status = GreyBigButton(tr("restart car\nto apply"), f"{tr('this drive')}: {MODE_NAMES[running]} mode\n" +
-                                                         f"{tr('selected')}: {MODE_NAMES[selected]} mode", warning)
-
-    widgets = [status]
-    for mode in (KYLE, MAYA):
-      widgets.append(GreyBigButton(f"{MODE_NAMES[mode]} mode"))
-      widgets += [GreyBigButton("", tr(line)) for line in MODE_DESCRIPTIONS[mode]]
-    if ui_state.engaged:
-      widgets.append(GreyBigButton("", tr("disengage to switch drivers")))
-    else:
-      widgets.append(GreyBigButton(f"{tr('switch to')}\n{MODE_NAMES[other]} mode", tr("applies at the next car start"), wheel))
-      # kyle mode turns factory AEB off, so it gets the red slider
-      widgets.append(BigConfirmationCircleButton(f"{tr('slide for')} {MODE_NAMES[other]} mode", wheel,
-                                                 lambda: self.dismiss(lambda: on_switch(other)), red=other == KYLE))
-    self._scroller.add_widgets(widgets)
-
-
 class DriverModeButton(SettingsBigButton):
   """Switch between kyle mode (openpilot gas/brake) and maya mode (stock ACC + factory AEB).
   A switch applies at the next car start; until then the card shows "<mode>: restart" in orange."""
@@ -81,7 +39,7 @@ class DriverModeButton(SettingsBigButton):
     self._wheel_icon = gui_app.texture("icons_mici/wheel.png", ICON_SIZE, ICON_SIZE)
     self._warning_icon = gui_app.texture("icons_mici/setup/warning.png", ICON_SIZE, ICON_SIZE)
     super().__init__(tr("driver"), "", self._wheel_icon)
-    self.set_click_callback(lambda: gui_app.push_widget(DriverModePage(self._switch)))
+    self.set_click_callback(self._on_click)
     # fires on every onroad/offroad change and once at startup
     ui_state.add_offroad_transition_callback(self._on_offroad_transition)
     self.refresh()
@@ -109,15 +67,20 @@ class DriverModeButton(SettingsBigButton):
       apply_pending_restore(ui_state.params)
     self.refresh()
 
+  def _on_click(self):
+    if ui_state.engaged:
+      gui_app.push_widget(BigDialog(tr("disengage to switch drivers"), ""))
+      return
+
+    new_mode = MAYA if self._selected == KYLE else KYLE
+    title = tr("slide for kyle mode") if new_mode == KYLE else tr("slide for maya mode")
+    # kyle mode turns factory AEB off, so it gets the red slider
+    gui_app.push_widget(BigConfirmationDialog(title, self._wheel_icon, red=new_mode == KYLE,
+                                              confirm_callback=lambda: self._switch(new_mode)))
+
   def _switch(self, mode: int):
     set_mode(ui_state.params, mode, offroad=not ui_state.started)
     self.refresh()
-    apply_note = tr("Turn the car off and on to apply.") if ui_state.started else tr("Applies when the car starts.")
-    if mode == MAYA:
-      desc = tr("Car's own cruise control and emergency braking; sunnypilot still steers.")
-    else:
-      desc = tr("sunnypilot gas and brake with your saved settings; factory emergency braking is off.")
-    gui_app.push_widget(BigDialog(tr("maya mode selected") if mode == MAYA else tr("kyle mode selected"), f"{desc} {apply_note}"))
 
 
 class SunnylinkBigButton(SettingsBigButton):
